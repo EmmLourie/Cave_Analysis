@@ -1,0 +1,139 @@
+---
+title: "Cave Switching3"
+author: "Emmanuel"
+date: "August 3, 2020"
+output: html_document
+---
+
+---
+title: "Cave Switching (after recovery)"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+#Get Data & Libraries 
+```{r chunk-1, results="hide",warning=FALSE,message=FALSE}
+library(tidyverse)
+# functions:
+source("Functions/Switching function.R")
+
+# Data:
+bat_trees_raw<-read_csv("data/stops_for_caves.csv")
+bat_trees_raw<-bat_trees_raw[!duplicated(  bat_trees_raw[,c("TAG", "start")]),]
+
+```
+
+###Filtering for cave-switching purposese:
+1. short term tags
+2. short duration on trees
+
+```{r chunk-Filtering, results="hide",warning=FALSE,message=FALSE}
+
+No.tags.start<-length(unique(bat_trees_raw$TAG))
+min.tree.dur<-summary(bat_trees_raw$duration)[[2]] # 1st quarantile
+min.nights<-3
+#Filter No.1:
+tag_short<-unique(bat_trees_raw$TAG[bat_trees_raw$Number_of_Nights<min.nights])
+bat_trees_raw<-bat_trees_raw[!bat_trees_raw$TAG %in% tag_short,]
+print(paste0("Number of tags lost after short tags exclusion: ",No.tags.start-length(unique(bat_trees_raw$TAG))))
+#Filter No.2:
+bat_trees_raw<-bat_trees_raw[bat_trees_raw$duration>min.tree.dur,] 
+
+```
+
+###Example tag for check-ups:
+
+```{r chunk-example tags, results="hide",warning=FALSE,message=FALSE}
+tg<-as.character(6271)
+tg_ex<-subset(bat_trees_raw, TAG==tg);tg_ex<-tg_ex[!duplicated(tg_ex$night_number),]
+```
+
+###Cave Switching function (long version).
+####Some considerations:
+
+1. To make sure caves switches are correct (as some may be incorrectly classified), I will only select events were the bat stayed in the cave for at least 2 days in a row, so that 1-night mistakes be excluded.
+2. The variable to examine (before and after the switch) is the mean accumulated trees per night. 
+3. set night-boundary (beyond which accumulated trees don't relate to the switch)
+```{r chunk-cave switching, results="hide",warning=FALSE,message=FALSE}
+
+switch_all_bats<-data.frame(matrix(nrow = 0.1*nrow(bat_trees_raw), ncol = 8))
+colnames(switch_all_bats)<-c("TAG","Night_of_Switch", "From", "To","accumulated_before", "nights_before", "accumulated_after", "nights_after")
+TagList<-unique(bat_trees_raw$TAG)
+for (tg in TagList){
+tg_df<-subset(bat_trees_raw, TAG==tg)
+if(nrow(tg_df)>0){
+tg_df<-tg_df[order(tg_df$night_number),]
+tg_df$caves_switch<-c(NA,diff(as.factor(tg_df$cave_origin)))
+tg_df_unq<-tg_df[!duplicated(tg_df$night_number),]
+tg_df_unq<-tg_df_unq[!is.na(tg_df_unq$caves_switch),]
+switch_inx<-which(tg_df_unq$caves_switch!=0)
+wrong_nights<-NULL
+for (s in switch_inx){
+cave1<- tg_df_unq$cave_origin[s]
+cave2<-tg_df_unq$cave_origin[s+1]
+if (cave1!=cave2 & !is.na(cave1) & !is.na(cave2)){
+wrong_night<-tg_df_unq$night_number[s]
+wrong_nights<-c(wrong_nights,wrong_night)
+}}
+wrong_nights<-unique(wrong_nights)
+tg_df$cave_origin[tg_df$night_number %in% wrong_nights ]<-NA
+tg_df$caves_switch<-c(NA,diff(as.factor(tg_df$cave_origin)))
+
+# Calculate accumulated trees before and after each switch
+nights_of_switch<-tg_df$night_number[which(tg_df$caves_switch!=0)]
+tg_df_unq<-tg_df[!duplicated(tg_df$night_number),]
+
+tg_df<-tg_df[order(tg_df$start),]
+if(length(nights_of_switch)>0){
+tg_df$new_t<-cumsum(!duplicated(tg_df$cluster_ID))
+switch_acc_df<-data.frame(matrix(nrow = length(nights_of_switch), ncol = 8))
+colnames(switch_acc_df)<-c("TAG","Night_of_Switch", "From", "To","accumulated_before", "nights_before", "accumulated_after", "nights_after")
+
+max.nights.switch<-7
+for (n in 1:(length(nights_of_switch))){
+if (n==1){
+before_df<-tg_df[tg_df$night_number<nights_of_switch[n] & tg_df$night_number>=(nights_of_switch[n]-max.nights.switch),]
+}else{
+before_df<-tg_df[tg_df$night_number<nights_of_switch[n] & tg_df$night_number>nights_of_switch[n-1] & tg_df$night_number>= (nights_of_switch[n]-max.nights.switch),]
+}
+if (n==length(nights_of_switch)){
+after_df<-tg_df[tg_df$night_number>=nights_of_switch[n] & tg_df$night_number<=(nights_of_switch[n]+max.nights.switch),]
+}else {
+after_df<-tg_df[tg_df$night_number>=nights_of_switch[n] & tg_df$night_number<nights_of_switch[n+1] & tg_df$night_number<=(nights_of_switch[n]+max.nights.switch),]
+}
+before_cave<-before_df$cave_origin[nrow(before_df)]
+after_cave<-after_df$cave_origin[2]
+before_night_length<-length(unique(before_df$night_number))
+after_night_length<-length(unique(after_df$night_number))
+before_acc_night<-(max(before_df$new_t)-min(before_df$new_t))/before_night_length
+after_acc_night<-(max(after_df$new_t)-max(before_df$new_t))/after_night_length
+switch<-c(tg, nights_of_switch[n],before_cave,after_cave, before_acc_night,before_night_length,after_acc_night,after_night_length )
+switch_acc_df[n,]<-switch
+}
+switch_all_bats<-rbind(switch_all_bats,switch_acc_df)
+}}}
+switch_all_bats<-na.omit(switch_all_bats)
+switch_all_bats<-switch_all_bats[!duplicated(switch_all_bats[,c("TAG","Night_of_Switch")]),]
+switch_all_bats$accumulated_after<-as.double(switch_all_bats$accumulated_after); switch_all_bats$accumulated_before<-as.double(switch_all_bats$accumulated_before)
+switch_all_bats$tree_change<-switch_all_bats$accumulated_after-switch_all_bats$accumulated_before
+switch_all_bats_long<-switch_all_bats[switch_all_bats$nights_before>2 & switch_all_bats$nights_after > 2,]
+
+
+```
+
+###Plot results:
+```{r chunk-plot cave switching,warning=FALSE,message=FALSE}
+
+c1 <- rgb(173,216,230,max = 255, alpha = 80, names = "lt.blue")
+c2 <- rgb(255,192,203, max = 255, alpha = 80, names = "lt.pink")
+
+hist(switch_all_bats$accumulated_before, xlim=c(0,10), col=c1);  hist(switch_all_bats$accumulated_after, xlim=c(0,10), add=T, col=c2)
+
+```
+
+### Identify tree accumulation events and then ask - did it follow a cave-switch?
+```{r chunk-identify tree dicoveries,warning=FALSE,message=FALSE}
+
+
+```

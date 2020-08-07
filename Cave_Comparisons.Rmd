@@ -1,0 +1,213 @@
+---
+title: "Cave Comparison"
+author: "Emmanuel"
+date: "June 5, 2020"
+output: html_document
+---
+
+###Get Data & Libraries 
+
+```{r chunk-1, results="hide",warning=FALSE,message=FALSE}
+rm(list=ls())
+library("asnipe") # many things damien is doing
+library('igraph') 
+library('assortnet') # for assortativity (Damien)  
+library('sna')
+library(dplyr)
+library(tidyverse)
+library(vegan)
+options(digits = 12)
+source('Caves_Null_Modeling.R')
+
+# Data:
+#bat_trees_raw<-read_csv("data/net_raw_all_bats_long_20200322.csv")
+bat_trees_raw<-read_csv("data/stops_for_caves.csv")
+bat_trees_raw<-bat_trees_raw[!duplicated(bat_trees_raw[,c("TAG", "start")]),]
+
+
+#trees<-read_csv("data/Tree_Detailes_long_20200322.csv")
+#caves_ID<-c(1:11)
+length(unique(bat_trees_raw$TAG))
+```
+
+
+####Select months for analysis (based on representitivness of bats in the two largest caves)  
+
+```{r chunk-4, results="hide",warning=FALSE,message=FALSE}
+bat_trees_raw$year<-lubridate::year(bat_trees_raw$date)
+bat_trees_raw$month_year<-paste0(bat_trees_raw$month,"_",bat_trees_raw$year)
+how_many_tags<-aggregate(bat_trees_raw$TAG, list(bat_trees_raw$month_year),function(x) length(unique(x)))
+colnames(how_many_tags)<-c("Month_y","Count")
+how_many_caves<-aggregate(bat_trees_raw$cave_origin, list(bat_trees_raw$month_year),function(x) length(unique(x)))
+colnames(how_many_caves)<-c("Month_y","Count")
+
+# First, remove month that have only 1 cave:
+keep_months1<-how_many_caves$Month_y[how_many_caves$Count>1]
+
+# then also months that have less than 4 bats:
+keep_months2<-how_many_tags$Month_y[how_many_tags$Count>4]
+
+keep_months<-intersect(keep_months1,keep_months2)
+
+# Use only data of bats from two largest caves:
+caves<-c("Har Gershom","Zemer cave")
+caves_df<-bat_trees_raw[bat_trees_raw$cave_origin %in% caves,]
+caves_df<-caves_df[caves_df$month_year %in% keep_months,]
+
+# check:
+aggregate(caves_df$TAG, list(caves_df$cave_origin), function(x) length(unique(x)))
+
+
+rm(night,how_many_caves,how_many_tags,TAG_Night) # remove unused dataframes
+rm(cave_select, caves, caves_ID,date,date_global,inx,keep_months, keep_months1, keep_months2, ngt, nnights, nt.ix,path,tg,tg_nt,tg.ix)
+
+```
+
+####Observed overlap:  
+
+```{r chunk-5, results="hide",warning=FALSE,message=FALSE}
+obs_overlap_df<-cave_overlap(caves_df)
+obs_overlap__all_years_df<-cave_overlap_all_years (caves_df)
+```
+
+####Perumutate for expected overlap:  
+
+** All Years: **
+```{r chunk-6, results="hide",warning=FALSE,message=FALSE}
+overlap_per_df_all_years<-NULL 
+avg_overlap_df<-NULL
+P<-1000
+for (i in 1:P){
+  caves_df2<-NULL
+  for (m in unique(caves_df$month)){
+    m_df<-subset(caves_df,month==m)
+    prob_gershom<-length(unique( m_df$TAG_Night[ m_df$cave_origin=="Har Gershom"]))/length(unique(m_df$TAG_Night))
+    prob_zemer<-length(unique( m_df$TAG_Night[ m_df$cave_origin=="Zemer cave"]))/length(unique( m_df$TAG_Night))
+    
+    probs<-c(prob_gershom,prob_zemer)
+    rand_m_df<- m_df%>%
+      group_by(cave_origin, TAG_Night)%>%
+      summarise("random_cave"=sample(c("Har Gershom","Zemer cave"),1,replace=F, prob = probs))
+    rand_m_full<-left_join(m_df,rand_m_df,by=c("TAG_Night","cave_origin"))
+    #print(paste0("caves ration after perm:",sum(table(rand_my_full$cave_origin)-table(rand_my_full$random_cave))))
+    caves_df2<-rbind(caves_df2,rand_m_full)
+  }
+  
+  
+  caves_df2<-caves_df2[, -which(names(caves_df2) %in% c("cave_origin"))]
+  colnames(caves_df2)<-gsub("random_cave", "cave_origin",  colnames(caves_df2))
+  
+  tmp_df<-cave_overlap_all_years(caves_df2)
+  #print(head(tmp_df),n=10)
+  
+  mean_overlap<-mean(tmp_df$Overlap_caves)
+  overlap_per_df_all_years<-rbind(overlap_per_df_all_years,tmp_df)
+  avg_overlap_df<-c(avg_overlap_df,mean_overlap)
+}
+
+```
+
+Load permutated results (saved externally to save computation time of permutations)
+```{r chunk-7, results="hide",warning=FALSE,message=FALSE}
+overlap_per_df<-read.csv("permurated_overlap_per_months.csv")
+avg_overlap_df<-read.csv("permurated_overlap_means.csv")
+```
+
+Plot results (in a different script of Cave Comparisons - I also ran results per month)
+```{r chunk-8, results="hide",warning=FALSE,message=FALSE}
+par(mfrow=c(1,1))
+mean_obs<-mean(obs_overlap__all_years_df$Overlap_caves)
+P<-1000
+Pvalue<- (1+sum(mean_obs>=as.double(avg_overlap_df)))/(P+1)
+hist(avg_overlap_df,breaks=100, col="lightgray", xlim=c(0,0.1), main="Low overlap between the two large caves (p<0.001)", xlab = "Proportion of Cave Overlap", ylab="Frequency (permutations)")
+mean_obs<-mean(as.double(obs_overlap_df$Overlap_caves))
+abline(v=mean_obs, col="red")
+```
+
+
+
+# Now the same proccess, but using the area-covered instead of the tree overlap:  
+```{r chunk-9, results="hide",warning=FALSE,message=FALSE}
+obs_area_overlap<-Cave_area_overlap(caves_df)
+
+```
+
+####Perumutate for expected AREA overlap:  
+```{r chunk-10, results="hide",warning=FALSE,message=FALSE}
+P<-1000
+overlap_per_area<-NULL 
+mean_overlap_per_area<-NULL
+for (i in 1:P){
+  caves_df2<-NULL
+  for (m in unique(caves_df$month)){
+    m_df<-subset(caves_df,month==m)
+    prob_gershom<-length(unique( m_df$TAG_Night[ m_df$cave_origin=="Har Gershom"]))/length(unique(m_df$TAG_Night))
+    prob_zemer<-length(unique( m_df$TAG_Night[ m_df$cave_origin=="Zemer cave"]))/length(unique( m_df$TAG_Night))
+    
+    probs<-c(prob_gershom,prob_zemer)
+    rand_m_df<- m_df%>%
+      group_by(cave_origin, TAG_Night)%>%
+      summarise("random_cave"=sample(c("Har Gershom","Zemer cave"),1,replace=F, prob = probs))
+    rand_m_full<-left_join(m_df,rand_m_df,by=c("TAG_Night","cave_origin"))
+    #print(paste0("caves ration after perm:",sum(table(rand_my_full$cave_origin)-table(rand_my_full$random_cave))))
+    caves_df2<-rbind(caves_df2,rand_m_full)
+  }
+  
+  
+  caves_df2<-caves_df2[, -which(names(caves_df2) %in% c("cave_origin"))]
+  colnames(caves_df2)<-gsub("random_cave", "cave_origin",  colnames(caves_df2))
+  
+  tmp_df<-Cave_area_overlap(caves_df2)
+#  print(head(tmp_df),n=10)
+  
+  
+  overlap_per_area<-rbind(overlap_per_area,tmp_df)
+  
+ mean_area_overlap<-mean(as.double(tmp_df$Area_overlap), na.rm=T)
+ mean_overlap_per_area<-cbind(mean_overlap_per_area, mean_area_overlap)
+
+#  mean_proportion_area_overlap<-mean(as.double(tmp_df$AProportion_overlap), na.rm=T)
+  
+  write.csv(overlap_per_area, "overlap_per_area.csv")
+  write.csv( mean_overlap_per_area, "mean_area_overlap.csv")
+
+  }
+
+```
+
+
+
+####Load saved permutated data of area overlap
+```{r, chunk-11}
+overlap_per_area<-read_csv("overlap_per_area.csv")
+overlap_per_area<-overlap_per_area[,-1]
+overlap_per_area<-na.omit(overlap_per_area)
+overlap_per_area$run<-gl(nrow(overlap_per_area)/10,10)
+```
+
+Plot results of null modeling for area
+```{r chunk-12, results="hide",warning=FALSE,message=FALSE}
+par(mfrow=c(2,1))
+mean_obs_area<-mean(obs_area_overlap$Area_overlap)
+mean_obs_area_prop<-mean(obs_area_overlap$Proportion_overlap)
+
+mean_perm_area<-as.data.frame(aggregate(overlap_per_area$Area_overlap,list(overlap_per_area$run),mean))
+colnames(mean_perm_area)<-c("Run", "Area_overlap")
+
+
+mean_perm_area_prop<-as.data.frame(aggregate(overlap_per_area$Proportion_overlap,list(overlap_per_area$run),mean))
+colnames(mean_perm_area_prop)<-c("Run", "Area_overlap_prop")
+
+
+
+Pvalue<- (1+sum(mean_obs_area>=as.double(mean_perm_area$Area_overlap)))/(P+1)
+
+hist(mean_perm_area$Area_overlap,breaks=100, col="lightgray",xlim=c(0,60), main="Low observed overlap between areas  covered by the two largest caves (p<0.001)", xlab = "Permutated Area Overlap Between Caves", ylab="Frequency (permutations)")
+abline(v=mean_obs_area, col="red")
+
+Pvalue_area<- (1+sum(mean_obs_area_prop>=as.double(mean_perm_area_prop$Area_overlap_prop)))/(P+1)
+hist(as.double(mean_perm_area_prop$Area_overlap_prop),breaks=100, col="lightgray",xlim=c(0,0.5), main="Low observed overlap between areas  covered by the two largest caves (p<0.001)", xlab = "Permutated Area Overlap Proportion Between Caves", ylab="Frequency (permutations)")
+abline(v=mean_obs_area_prop, col="red")
+
+```
+
